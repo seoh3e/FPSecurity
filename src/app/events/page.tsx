@@ -105,7 +105,7 @@ export default function EventsPage() {
                 </Td>
 
                 <Td>
-                  <RiskBadge level={e.riskLevel} score={e.riskScore} />
+                  <RiskBadge score={e.riskScore} />
                 </Td>
 
                 <Td style={{ opacity: 0.85 }}>{e.detectedAt}</Td>
