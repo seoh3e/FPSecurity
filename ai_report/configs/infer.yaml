@@ -1,0 +1,13 @@
+model:
+  model_path: artifacts/model.joblib
+
+report:
+  top_k: 8
+  llm_provider: ollama
+  llm_model: qwen3-vl:8b
+  ollama_base_url: http://localhost:11434
+  ollama_timeout_sec: 600
+  policy_reference: 운영 정책 제3조(비정상 조작 금지)
+
+output:
+  report_dir: artifacts/reports

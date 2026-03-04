@@ -1,0 +1,12 @@
+data:
+  data_dir: context_windows_256
+  max_per_class: 500
+  seed: 42
+
+train:
+  model: random_forest
+  valid_size: 0.2
+  random_state: 42
+
+output:
+  artifact_dir: artifacts
