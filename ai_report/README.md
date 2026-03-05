@@ -37,7 +37,7 @@ ollama pull gemma3
 ## 학습
 
 데이터셋은 아래 링크에서 받을 수 있음.
-- https://huggingface.co/datasets/CS2CD/Context_window_
+- https://huggingface.co/datasets/CS2CD/Context_window_256
 
 ```bash
 python -m src.models.train_baseline --config configs/train.yaml
