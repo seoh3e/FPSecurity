@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import random
-from typing import Iterable
+from typing import Callable, Iterable
 
 import pandas as pd
 
@@ -51,17 +51,28 @@ def collect_samples(
     return records
 
 
-def build_feature_table(records: list[SampleRecord]) -> tuple[pd.DataFrame, pd.Series, list[str]]:
+def build_feature_table(
+    records: list[SampleRecord],
+    progress_callback: Callable[[int, int], None] | None = None,
+    progress_every: int = 50,
+) -> tuple[pd.DataFrame, pd.Series, list[str]]:
     rows: list[dict[str, float]] = []
     labels: list[int] = []
     paths: list[str] = []
 
-    for rec in records:
+    total = len(records)
+    if progress_callback and total > 0:
+        progress_callback(0, total)
+
+    for idx, rec in enumerate(records, start=1):
         df = pd.read_parquet(rec.path)
         feature_row = featurize_window(df)
         rows.append(feature_row)
         labels.append(rec.label)
         paths.append(str(rec.path))
+
+        if progress_callback and (idx % max(1, progress_every) == 0 or idx == total):
+            progress_callback(idx, total)
 
     x = pd.DataFrame(rows)
     y = pd.Series(labels, name="label")

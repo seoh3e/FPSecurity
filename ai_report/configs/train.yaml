@@ -5,6 +5,7 @@ data:
 
 train:
   model: random_forest
+  feature_progress_every: 50
   valid_size: 0.2
   random_state: 42
 
