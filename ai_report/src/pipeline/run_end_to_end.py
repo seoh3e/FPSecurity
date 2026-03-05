@@ -58,7 +58,7 @@ def run(config: dict, input_path: str | Path) -> dict:
         _log(f"XAI 설명 생성 실패: {explanation_error}")
 
     policy_reference = config["report"].get("policy_reference", "운영 정책 제2조(비인가 프로그램 사용 - 핵/변조작 금지)")
-    policy_path = config["report"].get("policy_path", "artifacts/rule.md")
+    policy_path = config["report"].get("policy_path", "docs/rule.md")
     policy_query = (
         f"{policy_reference} "
         f"risk={prediction.get('risk_level', '')} "

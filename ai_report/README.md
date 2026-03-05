@@ -1,6 +1,6 @@
 # AI_Anticheat_Report (AI Report + Simple ML)
 
-`ai_anticheat_plan.pdf`를 기반으로 만든 안티치트 분석 프로젝트임.
+`docs/ai_anticheat_plan.pdf`를 기반으로 만든 안티치트 분석 프로젝트임.
 
 ## 포함 기능
 
@@ -154,4 +154,4 @@ AI_Anticheat_Report/
 
 ## 실행 흐름 다이어그램
 
-![alt text](image.png)
+![alt text](./docs/image.png)
