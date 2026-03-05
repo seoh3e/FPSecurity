@@ -8,14 +8,26 @@
 - 간단한 XAI 스타일 근거 추출 (중요 피처 Top-K)
 - 운영자용 한국어 보고서 자동 생성
 - LLM 연동 필수 (Ollama 또는 OpenAI)
-- rule 기반 탐지 근거 추출(예정)
+- `artifacts/rule.md` 기반 정책 근거 RAG 추출 (ChromaDB)
+- 백엔드 rule 기반 탐지 근거 추출(예정)
 
 ## 설치
+
+필수 설치 항목:
+- Ollama 설치 필요 (로컬 LLM 사용 시)
+- ChromaDB 설치 필요 (정책 RAG 사용 시)
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+```
+
+Ollama 실행/모델 준비:
+
+```bash
+ollama serve
+ollama pull gemma3(모델명은 상이할 수 있음.)
 ```
 
 ## 학습
@@ -42,6 +54,16 @@ python -m src.pipeline.run_end_to_end --config configs/infer.yaml --input <parqu
 ```
 
 기본 `configs/infer.yaml`은 Ollama(`llm_provider: ollama`)를 사용함.
+
+정책 RAG 설정:
+- `report.policy_path`: 정책 문서 경로 (기본 `artifacts/rule.md`)
+- `report.policy_top_k`: 리포트/LLM 프롬프트에 주입할 정책 근거 개수
+- `report.policy_chroma_dir`: ChromaDB 영구 저장 디렉토리
+- `report.policy_chroma_collection`: 정책 벡터 컬렉션 이름
+
+주의:
+- ChromaDB는 현재 일부 Python 3.14 환경에서 호환 이슈가 있을 수 있음.
+- 정책 RAG를 안정적으로 쓰려면 Python 3.11~3.13 가상환경을 권장함.
 
 문제 해결 팁:
 - 404가 나면 `llm_model`이 설치된 모델과 다른 경우가 많음.
