@@ -1,4 +1,5 @@
 sudo systemctl enable redis-server
+
 sudo systemctl start redis-server
 
 uvicorn main:app --reload
