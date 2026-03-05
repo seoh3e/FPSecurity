@@ -1,6 +1,6 @@
 # AI_Anticheat_Report (AI Report + Simple ML)
 
-`initial_plan.md`를 기반으로 만든 안티치트 분석 프로젝트임.
+`ai_anticheat_plan.pdf`를 기반으로 만든 안티치트 분석 프로젝트임.
 
 ## 포함 기능
 
@@ -9,8 +9,10 @@
 - 운영자용 한국어 보고서 자동 생성
 - LLM 연동 필수 (Ollama 또는 OpenAI)
 - `artifacts/rule.md` 기반 정책 근거 RAG 추출 (ChromaDB)
-- 백엔드 rule 기반 탐지 근거 추출(예정)
+- 리포트에 LLM Provider/Model 정보 표기
+- LLM 요약 출력 형식 제약(보고서형, 질문형 문장 금지)
 
+- 백엔드 rule 기반 탐지 근거 추출(예정)
 ## 설치
 
 필수 설치 항목:
@@ -27,8 +29,10 @@ Ollama 실행/모델 준비:
 
 ```bash
 ollama serve
-ollama pull gemma3(모델명은 상이할 수 있음.)
+ollama pull gemma3
 ```
+
+모델명은 환경에 따라 다를 수 있음.
 
 ## 학습
 
@@ -54,6 +58,10 @@ python -m src.pipeline.run_end_to_end --config configs/infer.yaml --input <parqu
 ```
 
 기본 `configs/infer.yaml`은 Ollama(`llm_provider: ollama`)를 사용함.
+
+리포트 출력 정책:
+- 실행 정보 섹션에 `LLM Provider`, `LLM Model`을 함께 기록함.
+- `LLM 요약`은 운영자 보고서 문체를 우선하며 질문형 마무리 문장을 지양함.
 
 정책 RAG 설정:
 - `report.policy_path`: 정책 문서 경로 (기본 `artifacts/rule.md`)
@@ -104,6 +112,7 @@ AI_Anticheat_Report/
 │  ├─ reporting/
 │  │  ├─ template_report.py  # 표준 양식 Markdown 리포트 생성
 │  │  └─ llm_adapter.py      # Ollama/OpenAI 연동 어댑터
+│  │  └─ policy_rag.py       # ChromaDB 기반 정책 문서 검색(RAG)
 │  └─ pipeline/
 │     └─ run_end_to_end.py   # 추론→XAI→리포트→LLM 요약 오케스트레이션
 ├─ artifacts/                # 실행 결과물
