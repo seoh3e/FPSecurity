@@ -21,6 +21,8 @@ def generate_template_report(
     explanation: dict,
     policy_reference: str = "운영 정책 제2조(비인가 프로그램 사용 - 핵/변조작 금지)",
     policy_evidence: list[dict] | None = None,
+    llm_provider: str = "unknown",
+    llm_model: str = "unknown",
 ) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     score = prediction["cheat_score"]
@@ -50,7 +52,9 @@ def generate_template_report(
         f"## 1) 실행 정보\n"
         f"- 생성 시각: {now}\n"
         f"- 입력 데이터: {prediction['input_path']}\n"
-        f"- 정책 기준: {policy_reference}\n\n"
+        f"- 정책 기준: {policy_reference}\n"
+        f"- LLM Provider: {llm_provider}\n"
+        f"- LLM Model: {llm_model}\n\n"
         f"## 2) 판정 요약\n"
         f"| 항목 | 값 |\n"
         f"|---|---|\n"

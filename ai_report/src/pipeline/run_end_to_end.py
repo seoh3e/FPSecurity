@@ -20,6 +20,9 @@ def _load_yaml(path: str | Path) -> dict:
 
 
 def run(config: dict, input_path: str | Path) -> dict:
+    llm_provider = config["report"].get("llm_provider", "auto")
+    llm_model = config["report"].get("llm_model", "gpt-4o-mini")
+
     bundle = load_bundle(config["model"]["model_path"])
     prediction = predict_one(input_path, bundle)
     explanation_error = None
@@ -59,6 +62,8 @@ def run(config: dict, input_path: str | Path) -> dict:
         explanation=explanation,
         policy_reference=policy_reference,
         policy_evidence=policy_evidence,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
     )
 
     if explanation_error:
@@ -77,6 +82,10 @@ def run(config: dict, input_path: str | Path) -> dict:
 
     llm_prompt = (
         "다음 분석 결과를 운영자용으로 요약하되, 반드시 아래 3개 항목만 같은 순서로 출력해.\n"
+        "절대 질문형 문장, 대화체, 독자에게 묻는 표현(예: 추가 질문이 있으신가요)을 쓰지 마.\n"
+        "친절 멘트/인사말/마무리 질문 없이 보고서 문체로 단정형 문장만 작성해.\n"
+        "금지 표현: 물음표(?, ？), '추가 질문', '궁금한 점', '원하시면', '알려 주세요', '문의해 주세요'.\n"
+        "출력은 반드시 정확히 3줄, 각 줄은 아래 접두사로 시작해야 함.\n"
         "형식:\n"
         "- 한줄 결론: ...\n"
         "- 핵심 근거 2개: 1) ... / 2) ...\n"
@@ -88,8 +97,8 @@ def run(config: dict, input_path: str | Path) -> dict:
     )
     llm_report = generate_llm_report(
         llm_prompt,
-        model=config["report"].get("llm_model", "gpt-4o-mini"),
-        provider=config["report"].get("llm_provider", "auto"),
+        model=llm_model,
+        provider=llm_provider,
         ollama_base_url=config["report"].get("ollama_base_url", "http://localhost:11434"),
         ollama_timeout_sec=int(config["report"].get("ollama_timeout_sec", 180)),
     )
@@ -112,6 +121,8 @@ def run(config: dict, input_path: str | Path) -> dict:
                 "policy_error": policy_error,
                 "explanation_error": explanation_error,
                 "llm_used": True,
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
                 "report_path": str(report_md),
             },
             indent=2,
@@ -128,6 +139,8 @@ def run(config: dict, input_path: str | Path) -> dict:
         "policy_error": policy_error,
         "explanation_error": explanation_error,
         "llm_used": True,
+        "llm_provider": llm_provider,
+        "llm_model": llm_model,
     }
 
 
