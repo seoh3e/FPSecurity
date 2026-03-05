@@ -9,6 +9,7 @@ import yaml
 
 from src.models.predict import load_bundle, predict_one
 from src.reporting.llm_adapter import generate_llm_report
+from src.reporting.policy_rag import retrieve_policy_evidence
 from src.reporting.template_report import generate_template_report
 from src.xai.explain import explain_prediction
 
@@ -32,10 +33,32 @@ def run(config: dict, input_path: str | Path) -> dict:
             "error": explanation_error,
         }
 
+    policy_reference = config["report"].get("policy_reference", "운영 정책 제2조(비인가 프로그램 사용 - 핵/변조작 금지)")
+    policy_path = config["report"].get("policy_path", "artifacts/rule.md")
+    policy_query = (
+        f"{policy_reference} "
+        f"risk={prediction.get('risk_level', '')} "
+        f"label={prediction.get('label_name', '')} "
+        f"top_features={' '.join(item.get('feature', '') for item in explanation.get('top_features', []))}"
+    )
+    policy_error = None
+    try:
+        policy_evidence = retrieve_policy_evidence(
+            policy_path=policy_path,
+            query=policy_query,
+            top_k=int(config["report"].get("policy_top_k", 3)),
+            persist_dir=config["report"].get("policy_chroma_dir", "artifacts/chroma_policy_db"),
+            collection_name=config["report"].get("policy_chroma_collection", "policy_rules"),
+        )
+    except Exception as exc:
+        policy_error = str(exc)
+        policy_evidence = []
+
     template_report = generate_template_report(
         prediction=prediction,
         explanation=explanation,
-        policy_reference=config["report"].get("policy_reference", "운영 정책 제3조(비정상 조작 금지)"),
+        policy_reference=policy_reference,
+        policy_evidence=policy_evidence,
     )
 
     if explanation_error:
@@ -43,6 +66,13 @@ def run(config: dict, input_path: str | Path) -> dict:
             "\n\n## 설명 생성 오류\n"
             "SHAP 설명 생성에 실패했습니다. 아래 오류를 확인하세요.\n"
             f"- error: {explanation_error}\n"
+        )
+
+    if policy_error:
+        template_report += (
+            "\n\n## 정책 RAG 오류\n"
+            "정책 벡터 검색(ChromaDB) 중 오류가 발생했습니다.\n"
+            f"- error: {policy_error}\n"
         )
 
     llm_prompt = (
@@ -53,7 +83,8 @@ def run(config: dict, input_path: str | Path) -> dict:
         "- 권고 액션: ...\n\n"
         f"예측: {json.dumps(prediction, ensure_ascii=False)}\n"
         f"근거: {json.dumps(explanation, ensure_ascii=False)}\n"
-        "정책: 운영 정책 제3조(비정상 조작 금지)."
+        f"정책: {policy_reference}.\n"
+        f"정책 RAG 근거: {json.dumps(policy_evidence, ensure_ascii=False)}"
     )
     llm_report = generate_llm_report(
         llm_prompt,
@@ -77,6 +108,8 @@ def run(config: dict, input_path: str | Path) -> dict:
             {
                 "prediction": prediction,
                 "explanation": explanation,
+                "policy_evidence": policy_evidence,
+                "policy_error": policy_error,
                 "explanation_error": explanation_error,
                 "llm_used": True,
                 "report_path": str(report_md),
@@ -91,6 +124,8 @@ def run(config: dict, input_path: str | Path) -> dict:
         "report_md": str(report_md),
         "report_json": str(report_json),
         "prediction": prediction,
+        "policy_evidence": policy_evidence,
+        "policy_error": policy_error,
         "explanation_error": explanation_error,
         "llm_used": True,
     }

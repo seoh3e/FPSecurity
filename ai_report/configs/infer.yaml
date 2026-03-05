@@ -7,7 +7,11 @@ report:
   llm_model: qwen3-vl:8b
   ollama_base_url: http://localhost:11434
   ollama_timeout_sec: 600
-  policy_reference: 운영 정책 제3조(비정상 조작 금지)
+  policy_reference: 운영 정책 제2조(비인가 프로그램 사용 - 핵/변조작 금지)
+  policy_path: artifacts/rule.md
+  policy_top_k: 3
+  policy_chroma_dir: artifacts/chroma_policy_db
+  policy_chroma_collection: policy_rules
 
 output:
   report_dir: artifacts/reports

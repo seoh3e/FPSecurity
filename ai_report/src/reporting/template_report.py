@@ -19,7 +19,8 @@ def _format_top_features_table(top_features: list[dict]) -> str:
 def generate_template_report(
     prediction: dict,
     explanation: dict,
-    policy_reference: str = "운영 정책 제3조(비정상 조작 금지)",
+    policy_reference: str = "운영 정책 제2조(비인가 프로그램 사용 - 핵/변조작 금지)",
+    policy_evidence: list[dict] | None = None,
 ) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     score = prediction["cheat_score"]
@@ -34,6 +35,15 @@ def generate_template_report(
         recommendation = "즉시 검토 및 임시 제재 권고"
     elif risk == "MEDIUM":
         recommendation = "우선 검토 대상 등록"
+
+    policy_evidence_lines = "- 관련 정책 근거를 찾지 못했습니다."
+    if policy_evidence:
+        rows: list[str] = []
+        for idx, item in enumerate(policy_evidence, start=1):
+            title = item.get("title", "정책 조항")
+            excerpt = item.get("excerpt", "")
+            rows.append(f"- {idx}) {title}: {excerpt}")
+        policy_evidence_lines = "\n".join(rows)
 
     return (
         f"# 안티치트 분석 보고서 (표준 양식 v1)\n\n"
@@ -57,6 +67,8 @@ def generate_template_report(
         f"- [ ] 최근 3판 리플레이에서 조준/반응 패턴 재확인\n"
         f"- [ ] 유사 신고/제재 이력 확인\n"
         f"- [ ] 정책 조항 적합성 검토 후 제재 수위 확정\n\n"
-        f"## 5) 면책 및 주의\n"
+        f"## 5) 정책 근거 (RAG)\n"
+        f"{policy_evidence_lines}\n\n"
+        f"## 6) 면책 및 주의\n"
         f"본 결과는 AI 보조 판단입니다. 최종 제재는 운영자가 매치 리플레이/로그를 재검토 후 확정하세요.\n"
     )

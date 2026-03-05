@@ -31,7 +31,17 @@ def test_predict_and_report(tmp_path: Path) -> None:
 
     pred = predict_one(parquet_path, loaded)
     explanation = {"top_features": [{"feature": "attacker_X__mean", "score": 1.0, "ratio": 1.0}]}
-    report = generate_template_report(pred, explanation)
+    report = generate_template_report(
+        pred,
+        explanation,
+        policy_evidence=[
+            {
+                "title": "제3조 (비정상적 게임 이용 - 매크로/어뷰징)",
+                "excerpt": "단순 반복 동작 자동화 및 시스템 악용 행위를 금지함.",
+            }
+        ],
+    )
 
     assert pred["pred_label"] == 1
     assert "안티치트 분석 보고서 (표준 양식 v1)" in report
+    assert "정책 근거 (RAG)" in report
