@@ -1,6 +1,6 @@
 # AI_Anticheat_Report (AI Report + Simple ML)
 
-`docs/ai_anticheat_plan.pdf`를 기반으로 만든 안티치트 분석 프로젝트임.
+`docs/ai_anticheat_plan.pdf`를 기반으로 만든 안티치트 분석 프로젝트.
 
 ## 포함 기능
 
@@ -12,7 +12,7 @@
 - 리포트에 LLM Provider/Model 정보 표기
 - LLM 요약 출력 형식 제약(보고서형, 질문형 문장 금지)
 
-- 백엔드 rule 기반 탐지 근거 추출(예정)
+- 백엔드 핵 탐지(JSON) 연계 입력 지원
 ## 설치
 
 필수 설치 항목:
@@ -57,7 +57,19 @@ python -m src.models.train_baseline --config configs/train.yaml
 python -m src.pipeline.run_end_to_end --config configs/infer.yaml --input <parquet_file_path>
 ```
 
+백엔드 핵 탐지 결과를 함께 주입하는 예시:
+
+```bash
+python -m src.pipeline.run_end_to_end --config configs/infer.yaml --input <parquet_file_path> --backend-signal <backend_alert.json>
+```
+
 기본 `configs/infer.yaml`은 Ollama(`llm_provider: ollama`)를 사용함.
+
+백엔드 핵 탐지 연계(옵션):
+- `configs/infer.yaml`의 `report.backend_signal_path`에 JSON 파일 경로 지정
+- 또는 실행 시 `--backend-signal <json_path>` 인자 사용
+- JSON 형식 예시: `{"violations": [{"type": "Consistent Speed Hack", "status": "High Probability", "avg": 14.2, "std_dev": 1.1}]}`
+- 리포트 반영 위치: `백엔드 핵 탐지` 섹션 + LLM 요약 프롬프트
 
 리포트 출력 정책:
 - 실행 정보 섹션에 `LLM Provider`, `LLM Model`을 함께 기록함.

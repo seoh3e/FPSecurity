@@ -12,6 +12,7 @@ report:
   policy_top_k: 3
   policy_chroma_dir: artifacts/chroma_policy_db
   policy_chroma_collection: policy_rules
+  backend_signal_path: null
 
 output:
   report_dir: artifacts/reports

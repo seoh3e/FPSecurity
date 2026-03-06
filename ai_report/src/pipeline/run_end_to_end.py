@@ -24,13 +24,37 @@ def _log(message: str) -> None:
     print(f"[infer] {message}", flush=True)
 
 
-def run(config: dict, input_path: str | Path) -> dict:
+def _load_backend_detections(path: str | Path | None) -> list[dict]:
+    if not path:
+        return []
+
+    p = Path(path)
+    if not p.exists():
+        return []
+
+    raw = json.loads(p.read_text(encoding="utf-8-sig"))
+    if isinstance(raw, dict):
+        violations = raw.get("violations")
+        if isinstance(violations, list):
+            return [item for item in violations if isinstance(item, dict)]
+        return [raw]
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    return []
+
+
+def run(config: dict, input_path: str | Path, backend_signal_path: str | Path | None = None) -> dict:
     start = perf_counter()
     llm_provider = config["report"].get("llm_provider", "auto")
     llm_model = config["report"].get("llm_model", "gpt-4o-mini")
 
     _log(f"실행 시작: input={input_path}")
     _log(f"LLM 설정: provider={llm_provider}, model={llm_model}")
+
+    backend_signal_path = backend_signal_path or config["report"].get("backend_signal_path")
+    _log("백엔드 핵 탐지 결과 로드 중...")
+    backend_detections = _load_backend_detections(backend_signal_path)
+    _log(f"백엔드 핵 탐지 결과 로드 완료: detections={len(backend_detections)}")
 
     _log("모델 로드 중...")
     bundle = load_bundle(config["model"]["model_path"])
@@ -87,6 +111,7 @@ def run(config: dict, input_path: str | Path) -> dict:
         explanation=explanation,
         policy_reference=policy_reference,
         policy_evidence=policy_evidence,
+        backend_detections=backend_detections,
         llm_provider=llm_provider,
         llm_model=llm_model,
     )
@@ -119,7 +144,8 @@ def run(config: dict, input_path: str | Path) -> dict:
         f"예측: {json.dumps(prediction, ensure_ascii=False)}\n"
         f"근거: {json.dumps(explanation, ensure_ascii=False)}\n"
         f"정책: {policy_reference}.\n"
-        f"정책 RAG 근거: {json.dumps(policy_evidence, ensure_ascii=False)}"
+        f"정책 RAG 근거: {json.dumps(policy_evidence, ensure_ascii=False)}\n"
+        f"백엔드 핵 탐지: {json.dumps(backend_detections, ensure_ascii=False)}"
     )
     llm_report = generate_llm_report(
         llm_prompt,
@@ -147,6 +173,8 @@ def run(config: dict, input_path: str | Path) -> dict:
                 "explanation": explanation,
                 "policy_evidence": policy_evidence,
                 "policy_error": policy_error,
+                "backend_detections": backend_detections,
+                "backend_signal_path": str(backend_signal_path) if backend_signal_path else None,
                 "explanation_error": explanation_error,
                 "llm_used": True,
                 "llm_provider": llm_provider,
@@ -169,6 +197,8 @@ def run(config: dict, input_path: str | Path) -> dict:
         "prediction": prediction,
         "policy_evidence": policy_evidence,
         "policy_error": policy_error,
+        "backend_detections": backend_detections,
+        "backend_signal_path": str(backend_signal_path) if backend_signal_path else None,
         "explanation_error": explanation_error,
         "llm_used": True,
         "llm_provider": llm_provider,
@@ -180,10 +210,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run end-to-end inference + explanation + reporting")
     parser.add_argument("--config", default="configs/infer.yaml", help="Path to inference config")
     parser.add_argument("--input", required=True, help="Input parquet file path")
+    parser.add_argument(
+        "--backend-signal",
+        default=None,
+        help="Optional backend hack-detection JSON path (e.g., FastAPI alert payload)",
+    )
     args = parser.parse_args()
 
     config = _load_yaml(args.config)
-    result = run(config=config, input_path=args.input)
+    result = run(config=config, input_path=args.input, backend_signal_path=args.backend_signal)
     # print(json.dumps(result, indent=2, ensure_ascii=False))
 
 

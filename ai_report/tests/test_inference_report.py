@@ -40,6 +40,14 @@ def test_predict_and_report(tmp_path: Path) -> None:
                 "excerpt": "단순 반복 동작 자동화 및 시스템 악용 행위를 금지함.",
             }
         ],
+        backend_detections=[
+            {
+                "type": "Consistent Speed Hack",
+                "status": "High Probability",
+                "avg": 14.7,
+                "std_dev": 1.3,
+            }
+        ],
         llm_provider="ollama",
         llm_model="qwen3-vl:8b",
     )
@@ -47,4 +55,5 @@ def test_predict_and_report(tmp_path: Path) -> None:
     assert pred["pred_label"] == 1
     assert "안티치트 분석 보고서 (표준 양식 v1)" in report
     assert "정책 근거 (RAG)" in report
+    assert "백엔드 핵 탐지" in report
     assert "LLM Model: qwen3-vl:8b" in report

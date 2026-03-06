@@ -21,6 +21,7 @@ def generate_template_report(
     explanation: dict,
     policy_reference: str = "운영 정책 제2조(비인가 프로그램 사용 - 핵/변조작 금지)",
     policy_evidence: list[dict] | None = None,
+    backend_detections: list[dict] | None = None,
     llm_provider: str = "unknown",
     llm_model: str = "unknown",
 ) -> str:
@@ -46,6 +47,22 @@ def generate_template_report(
             excerpt = item.get("excerpt", "")
             rows.append(f"- {idx}) {title}: {excerpt}")
         policy_evidence_lines = "\n".join(rows)
+
+    backend_detection_lines = "- 백엔드 핵 탐지 결과 없음"
+    if backend_detections:
+        rows = []
+        for idx, item in enumerate(backend_detections, start=1):
+            dtype = item.get("type", "unknown")
+            status = item.get("status", "unknown")
+            avg = item.get("avg")
+            std_dev = item.get("std_dev")
+            detail = f"type={dtype}, status={status}"
+            if avg is not None:
+                detail += f", avg={avg}"
+            if std_dev is not None:
+                detail += f", std_dev={std_dev}"
+            rows.append(f"- {idx}) {detail}")
+        backend_detection_lines = "\n".join(rows)
 
     return (
         f"# 안티치트 분석 보고서 (표준 양식 v1)\n\n"
@@ -73,6 +90,8 @@ def generate_template_report(
         f"- [ ] 정책 조항 적합성 검토 후 제재 수위 확정\n\n"
         f"## 5) 정책 근거 (RAG)\n"
         f"{policy_evidence_lines}\n\n"
-        f"## 6) 면책 및 주의\n"
+        f"## 6) 백엔드 핵 탐지\n"
+        f"{backend_detection_lines}\n\n"
+        f"## 7) 면책 및 주의\n"
         f"본 결과는 AI 보조 판단입니다. 최종 제재는 운영자가 매치 리플레이/로그를 재검토 후 확정하세요.\n"
     )
