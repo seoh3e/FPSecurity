@@ -1,34 +1,37 @@
 import uvicorn
-import json
 import numpy as np
-import redis
+import redis.asyncio as redis
 from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime
+import json
 
-app = FastAPI(title="Pro Game Security Analysis (Redis + Stats)")
+app = FastAPI(title="FPS Pro-Guard: Real-time Security Analysis")
 
-# --- [1] Infrastructure Setup ---
-# Ensure redis-server is running (Docker or Local)
-try:
-    r = redis.StrictRedis(host='localhost', port=6379, db=0, decode_responses=True)
-    r.ping()
-except redis.ConnectionError:
-    print("❌ Cannot connect to Redis. Running in local memory mode or please start Redis.")
+# --- [1] 비동기 인프라 설정 ---
+# Redis 연결 (비동기 모드)
+r = redis.from_url("redis://localhost:6379", decode_responses=True)
 
-# --- [2] Data Models ---
+# --- [2] 데이터 모델 (FPS 특화) ---
 class GameEvent(BaseModel):
-    type: str  # e.g., "MOVE", "FIRE"
+    type: str  # MOVE, FIRE, HIT, AIM
+    # 공통 데이터
+    pos: Optional[List[float]] = None  # [x, y, z]
+    # 특정 이벤트 데이터
     speed: Optional[float] = None
-    fire_rate: Optional[float] = None
+    weapon_id: Optional[str] = None
+    damage: Optional[float] = None
+    target_id: Optional[str] = None
+    view_angles: Optional[List[float]] = None  # [pitch, yaw]
+    timestamp: float
 
 class LogPayload(BaseModel):
     player_id: str
     session_id: str
     events: List[GameEvent]
 
-# --- [3] Real-time Dashboard Manager ---
+# --- [3] 실시간 알림 시스템 ---
 class DashboardManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -40,95 +43,105 @@ class DashboardManager:
     def disconnect(self, websocket: WebSocket):
         self.active_connections.remove(websocket)
 
-    async def send_alert(self, message: dict):
+    async def broadcast_alert(self, alert: dict):
         for connection in self.active_connections:
-            await connection.send_json(message)
+            await connection.send_json(alert)
 
 manager = DashboardManager()
 
-# --- [4] Security Detection Engine (Redis + Statistical Analysis) ---
-CONFIG = {
-    "MOVE_THRESHOLD": 12.0,      # Avg speed limit
-    "STDEV_MAX": 2.5,           # Max deviation (Low value implies 'Consistent Hack')
-    "WINDOW_SIZE": 15,          # Number of recent events to analyze
-    "MIN_SAMPLES": 8,           # Minimum data points required
-    "TTL": 1800                 # User data retention (30 mins)
-}
+# --- [4] FPS 보안 엔진 (4대 핵심 로직) ---
+class FPSSecurityEngine:
+    # 총기 데이터베이스 (서버 측 검증용)
+    WEAPON_DB = {
+        "AK-47": {"max_dmg": 35.0, "min_interval": 0.1, "max_rpm": 600},
+        "AWM": {"max_dmg": 120.0, "min_interval": 1.2, "max_rpm": 50}
+    }
+    
+    CONFIG = {
+        "MOVE_THRESHOLD": 15.0,
+        "STDEV_MAX": 1.5,       # 속도핵 판별용 (낮을수록 일관된 핵)
+        "AIM_ANGLE_JUMP": 45.0, # 프레임간 비정상적인 시야 회전값
+        "WINDOW_SIZE": 20,
+        "TTL": 1800
+    }
 
-async def analyze_security_risk(payload: LogPayload):
-    pid = payload.player_id
-    detected_hacks = []
+    @staticmethod
+    async def analyze(payload: LogPayload):
+        pid = payload.player_id
+        violations = []
 
-    for event in payload.events:
-        # --- Speed Hack Analysis ---
-        if event.type == "MOVE" and event.speed is not None:
-            key = f"player:{pid}:move_history"
-            
-            # 1. Store in Redis & Maintain Sliding Window
-            r.lpush(key, event.speed)
-            r.ltrim(key, 0, CONFIG["WINDOW_SIZE"] - 1)
-            r.expire(key, CONFIG["TTL"])
-
-            # 2. Statistical Analysis
-            raw_history = r.lrange(key, 0, -1)
-            if len(raw_history) >= CONFIG["MIN_SAMPLES"]:
-                history = [float(v) for v in raw_history]
+        for event in payload.events:
+            # 1. 속도핵 (Speed Hack) - 통계적 변동성 분석
+            if event.type == "MOVE" and event.speed:
+                key = f"player:{pid}:speed"
+                await r.lpush(key, event.speed)
+                await r.ltrim(key, 0, FPSSecurityEngine.CONFIG["WINDOW_SIZE"])
                 
-                avg_speed = np.mean(history)
-                std_dev = np.std(history)
+                history = await r.lrange(key, 0, -1)
+                if len(history) >= 10:
+                    speeds = [float(v) for v in history]
+                    avg_speed = np.mean(speeds)
+                    std_dev = np.std(speeds)
+                    
+                    if avg_speed > FPSSecurityEngine.CONFIG["MOVE_THRESHOLD"] and std_dev < FPSSecurityEngine.CONFIG["STDEV_MAX"]:
+                        violations.append({"type": "Speed Hack", "val": round(avg_speed, 2), "prob": "High"})
 
-                # Detection Algorithm:
-                # - If Avg Speed > Threshold AND Std Dev is Low (Consistent speed boost, not lag)
-                if avg_speed > CONFIG["MOVE_THRESHOLD"]:
-                    if std_dev < CONFIG["STDEV_MAX"]:
-                        detected_hacks.append({
-                            "type": "Consistent Speed Hack",
-                            "avg": round(float(avg_speed), 2),
-                            "std_dev": round(float(std_dev), 2),
-                            "status": "High Probability"
-                        })
-                    else:
-                        # High average but high variance -> Likely Network Jitter
-                        print(f"⚠️ [SUSPICIOUS] Player {pid}: High speed but unstable (Jitter).")
+            # 2. 데미지핵 (Damage Hack) - 서버 데이터 대조
+            elif event.type == "HIT" and event.weapon_id:
+                w_info = FPSSecurityEngine.WEAPON_DB.get(event.weapon_id)
+                if w_info and event.damage > w_info["max_dmg"]:
+                    violations.append({"type": "Damage Hack", "expected": w_info["max_dmg"], "actual": event.damage})
 
-        # --- Rapid Fire Analysis ---
-        if event.type == "FIRE" and event.fire_rate is not None:
-            key = f"player:{pid}:fire_history"
-            r.lpush(key, event.fire_rate)
-            r.ltrim(key, 0, CONFIG["WINDOW_SIZE"] - 1)
-            
-            raw_fire = r.lrange(key, 0, -1)
-            if len(raw_fire) >= CONFIG["MIN_SAMPLES"]:
-                avg_fire = np.mean([float(v) for v in raw_fire])
-                if avg_fire > 15.0:  # Threshold: e.g., 15+ rounds per second
-                    detected_hacks.append({
-                        "type": "Rapid Fire Hack",
-                        "avg": round(float(avg_fire), 2)
-                    })
+            # 3. 연사핵 (Fire Rate Hack) - 발사 간격 검증
+            elif event.type == "FIRE" and event.weapon_id:
+                key = f"player:{pid}:last_fire"
+                last_time = await r.get(key)
+                if last_time:
+                    interval = event.timestamp - float(last_time)
+                    w_info = FPSSecurityEngine.WEAPON_DB.get(event.weapon_id)
+                    if w_info and interval < w_info["min_interval"] * 0.9: # 10% 오차 허용
+                        violations.append({"type": "Fire Rate Hack", "interval": round(interval, 4)})
+                await r.setex(key, 60, event.timestamp)
 
-    # Alert manager if violations are found
-    if detected_hacks:
-        alert_data = {
-            "player_id": pid,
-            "session_id": payload.session_id,
-            "violations": detected_hacks,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        await manager.send_alert(alert_data)
+            # 4. 에임핵 (Aim Hack) - 시야각 엔트로피/점프 분석
+            elif event.type == "AIM" and event.view_angles:
+                key = f"player:{pid}:aim"
+                # 이전 각도 가져오기
+                prev_angles_raw = await r.get(key)
+                if prev_angles_raw:
+                    prev_angles = json.loads(prev_angles_raw)
+                    # 각도 차이(Delta) 계산
+                    delta_pitch = abs(event.view_angles[0] - prev_angles[0])
+                    delta_yaw = abs(event.view_angles[1] - prev_angles[1])
+                    
+                    # 1프레임만에 비정상적으로 큰 회전 (Snap Aim)
+                    if delta_pitch > FPSSecurityEngine.CONFIG["AIM_ANGLE_JUMP"] or delta_yaw > FPSSecurityEngine.CONFIG["AIM_ANGLE_JUMP"]:
+                        violations.append({"type": "Aim Snap Detected", "delta": [delta_pitch, delta_yaw]})
+                
+                await r.setex(key, 60, json.dumps(event.view_angles))
 
-# --- [5] API Endpoints ---
-@app.post("/api/v1/logs")
-async def collect_logs(payload: LogPayload, background_tasks: BackgroundTasks):
-    # Offload analysis to background tasks for low latency
-    background_tasks.add_task(analyze_security_risk, payload)
-    return {"status": "ok", "received": len(payload.events)}
+        if violations:
+            alert = {
+                "player_id": pid,
+                "violations": violations,
+                "timestamp": datetime.now().isoformat()
+            }
+            await manager.broadcast_alert(alert)
 
-@app.websocket("/ws/dashboard")
-async def websocket_dashboard(websocket: WebSocket):
+# --- [5] API 엔드포인트 ---
+
+@app.post("/api/v1/report")
+async def report_logs(payload: LogPayload, background_tasks: BackgroundTasks):
+    # 비동기 백그라운드 분석 실행
+    background_tasks.add_task(FPSSecurityEngine.analyze, payload)
+    return {"status": "processing"}
+
+@app.websocket("/ws/security")
+async def security_ws(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            await websocket.receive_text() # Keep connection alive
+            await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
