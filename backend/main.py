@@ -1,37 +1,44 @@
 import uvicorn
+import json
 import numpy as np
-import redis.asyncio as redis
+import redis
 from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
-from typing import List, Optional, Dict
+from typing import List, Optional
 from datetime import datetime
-import json
+import time
+from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, HTTPException
+import os
+from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, HTTPException, Header
 
-app = FastAPI(title="FPS Pro-Guard: Real-time Security Analysis")
+app = FastAPI(title="Pro Game Security Analysis (Redis + Stats)")
 
-# --- [1] 비동기 인프라 설정 ---
-# Redis 연결 (비동기 모드)
-r = redis.from_url("redis://localhost:6379", decode_responses=True)
-
-# --- [2] 데이터 모델 (FPS 특화) ---
+# --- [1] Infrastructure Setup ---
+# Ensure redis-server is running (Docker or Local)
+REDIS_OK = False
+try:
+    r = redis.StrictRedis(host='localhost', port=6379, db=0, decode_responses=True)
+    r.ping()
+    REDIS_OK = True
+except redis.ConnectionError:
+    print("❌ Cannot connect to Redis. Running in local memory mode or please start Redis.")
+    r = None
+# --- [2] Data Models ---
 class GameEvent(BaseModel):
-    type: str  # MOVE, FIRE, HIT, AIM
-    # 공통 데이터
-    pos: Optional[List[float]] = None  # [x, y, z]
-    # 특정 이벤트 데이터
+    type: str  # e.g., "MOVE", "FIRE"
     speed: Optional[float] = None
-    weapon_id: Optional[str] = None
+    fire_rate: Optional[float] = None
+    # Damage Hack용
     damage: Optional[float] = None
+    weapon_id: Optional[str] = None
     target_id: Optional[str] = None
-    view_angles: Optional[List[float]] = None  # [pitch, yaw]
-    timestamp: float
 
 class LogPayload(BaseModel):
     player_id: str
     session_id: str
     events: List[GameEvent]
 
-# --- [3] 실시간 알림 시스템 ---
+# --- [3] Real-time Dashboard Manager ---
 class DashboardManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -43,105 +50,228 @@ class DashboardManager:
     def disconnect(self, websocket: WebSocket):
         self.active_connections.remove(websocket)
 
-    async def broadcast_alert(self, alert: dict):
+    async def send_alert(self, message: dict):
         for connection in self.active_connections:
-            await connection.send_json(alert)
+            await connection.send_json(message)
 
 manager = DashboardManager()
 
-# --- [4] FPS 보안 엔진 (4대 핵심 로직) ---
-class FPSSecurityEngine:
-    # 총기 데이터베이스 (서버 측 검증용)
-    WEAPON_DB = {
-        "AK-47": {"max_dmg": 35.0, "min_interval": 0.1, "max_rpm": 600},
-        "AWM": {"max_dmg": 120.0, "min_interval": 1.2, "max_rpm": 50}
-    }
+# --- [4] Security Detection Engine (Redis + Statistical Analysis) ---
+CONFIG = {
+    # ✅ Unauthorized Client (API Key) - NEW
+    "AUTH_API_KEY": os.getenv("SECURITY_API_KEY", "dev-secret"),
+    "AUTH_ENFORCE_BLOCK": True,   # True면 401로 차단 / False면 알림만
+    "MOVE_THRESHOLD": 12.0,
+    "STDEV_MAX": 2.5,
+    "WINDOW_SIZE": 15,
+    "MIN_SAMPLES": 5,
+    "TTL": 1800,
+
+    # ✅ DDoS Pattern (요청 빈도 제한) - NEW
+    "RL_WINDOW_SEC": 1,         # 몇 초 창으로 볼지
+    "RL_MAX_REQ": 5,            # 창 내 최대 요청 수(초당 5회 초과 시 탐지)
+    "RL_ENFORCE_BLOCK": False,  # True면 429로 차단, False면 탐지/알림만
     
-    CONFIG = {
-        "MOVE_THRESHOLD": 15.0,
-        "STDEV_MAX": 1.5,       # 속도핵 판별용 (낮을수록 일관된 핵)
-        "AIM_ANGLE_JUMP": 45.0, # 프레임간 비정상적인 시야 회전값
-        "WINDOW_SIZE": 20,
-        "TTL": 1800
-    }
+    # ✅ Damage Hack - NEW
+    "DMG_EVENT_TYPES": {"HIT", "DAMAGE"},
+    "DMG_MAX_DEFAULT": 120.0,  # 무기 정보 없을 때 단발 상한
+    "DMG_MAX_BY_WEAPON": {     # (선택) 무기별 단발 상한
+    "pistol": 35.0,
+    "rifle": 45.0,
+    "sniper": 120.0,
+},
+"DMG_DPS_WINDOW_SEC": 1,   # 초당 누적 데미지
+"DMG_DPS_MAX": 200.0,      # 1초 동안 누적 데미지 상한
+"DMG_ALERT_COOLDOWN_SEC": 5,  # 같은 플레이어는 5초에 1번만 알림(스팸 방지)
+}
 
-    @staticmethod
-    async def analyze(payload: LogPayload):
-        pid = payload.player_id
-        violations = []
+# ✅ DDoS Pattern 탐지: player_id 또는 IP 기준 요청 폭주 감지
+def check_rate_limit(player_id: str, client_ip: str) -> tuple[bool, int]:
+    """
+    return (is_exceeded, current_count)
+    Redis: INCR + EXPIRE로 RL_WINDOW_SEC 동안 카운트
+    """
+    key = f"rate:{player_id}"   # 가장 쉬운 기준: player_id
+    window = CONFIG["RL_WINDOW_SEC"]
 
-        for event in payload.events:
-            # 1. 속도핵 (Speed Hack) - 통계적 변동성 분석
-            if event.type == "MOVE" and event.speed:
-                key = f"player:{pid}:speed"
-                await r.lpush(key, event.speed)
-                await r.ltrim(key, 0, FPSSecurityEngine.CONFIG["WINDOW_SIZE"])
+    if REDIS_OK and r is not None:
+        cnt = r.incr(key)
+        if cnt == 1:
+            r.expire(key, window)
+        return (cnt > CONFIG["RL_MAX_REQ"], cnt)
+
+    # Redis 없을 때(백업): 매우 단순한 메모리 카운터(프로세스 재시작 시 초기화)
+    # 과제 데모 목적이면 충분
+    now = time.time()
+    if not hasattr(check_rate_limit, "_mem"):
+        check_rate_limit._mem = {}
+    mem = check_rate_limit._mem
+
+    cnt, start = mem.get(key, (0, now))
+    if now - start >= window:
+        cnt, start = 0, now
+    cnt += 1
+    mem[key] = (cnt, start)
+    return (cnt > CONFIG["RL_MAX_REQ"], cnt)
+
+async def analyze_security_risk(payload: LogPayload):
+    pid = payload.player_id
+    detected_hacks = []
+
+    for event in payload.events:
+        # --- Speed Hack Analysis ---
+        if event.type == "MOVE" and event.speed is not None:
+            key = f"player:{pid}:move_history"
+            
+            # 1. Store in Redis & Maintain Sliding Window
+            r.lpush(key, event.speed)
+            r.ltrim(key, 0, CONFIG["WINDOW_SIZE"] - 1)
+            r.expire(key, CONFIG["TTL"])
+
+            # 2. Statistical Analysis
+            raw_history = r.lrange(key, 0, -1)
+            if len(raw_history) >= CONFIG["MIN_SAMPLES"]:
+                history = [float(v) for v in raw_history]
                 
-                history = await r.lrange(key, 0, -1)
-                if len(history) >= 10:
-                    speeds = [float(v) for v in history]
-                    avg_speed = np.mean(speeds)
-                    std_dev = np.std(speeds)
+                avg_speed = np.mean(history)
+                std_dev = np.std(history)
+
+                # Detection Algorithm:
+                # - If Avg Speed > Threshold AND Std Dev is Low (Consistent speed boost, not lag)
+                if avg_speed > CONFIG["MOVE_THRESHOLD"]:
+                    if std_dev < CONFIG["STDEV_MAX"]:
+                        detected_hacks.append({
+                            "type": "Consistent Speed Hack",
+                            "avg": round(float(avg_speed), 2),
+                            "std_dev": round(float(std_dev), 2),
+                            "status": "High Probability"
+                        })
+                    else:
+                        # High average but high variance -> Likely Network Jitter
+                        print(f"⚠️ [SUSPICIOUS] Player {pid}: High speed but unstable (Jitter).")
+
+        # --- Rapid Fire Analysis ---
+        if event.type == "FIRE" and event.fire_rate is not None:
+            key = f"player:{pid}:fire_history"
+            r.lpush(key, event.fire_rate)
+            r.ltrim(key, 0, CONFIG["WINDOW_SIZE"] - 1)
+            
+            raw_fire = r.lrange(key, 0, -1)
+            if len(raw_fire) >= CONFIG["MIN_SAMPLES"]:
+                avg_fire = np.mean([float(v) for v in raw_fire])
+                if avg_fire > 15.0:  # Threshold: e.g., 15+ rounds per second
+                    detected_hacks.append({
+                        "type": "Rapid Fire Hack",
+                        "avg": round(float(avg_fire), 2)
+                    })
                     
-                    if avg_speed > FPSSecurityEngine.CONFIG["MOVE_THRESHOLD"] and std_dev < FPSSecurityEngine.CONFIG["STDEV_MAX"]:
-                        violations.append({"type": "Speed Hack", "val": round(avg_speed, 2), "prob": "High"})
+        # --- Damage Hack Analysis ---
+        if event.type in CONFIG["DMG_EVENT_TYPES"] and event.damage is not None:
+            dmg = float(event.damage)
+            weapon = (event.weapon_id or "unknown").lower()
 
-            # 2. 데미지핵 (Damage Hack) - 서버 데이터 대조
-            elif event.type == "HIT" and event.weapon_id:
-                w_info = FPSSecurityEngine.WEAPON_DB.get(event.weapon_id)
-                if w_info and event.damage > w_info["max_dmg"]:
-                    violations.append({"type": "Damage Hack", "expected": w_info["max_dmg"], "actual": event.damage})
+            # 1) 단발 데미지 상한 체크
+            max_hit = CONFIG["DMG_MAX_BY_WEAPON"].get(weapon, CONFIG["DMG_MAX_DEFAULT"])
+            if dmg > max_hit:
+                detected_hacks.append({
+                    "type": "Damage Hack",
+                    "reason": "Damage per hit exceeds max",
+                    "damage": round(dmg, 2),
+                    "max_hit": max_hit,
+                    "weapon": weapon,
+                    "target_id": event.target_id,
+                })
 
-            # 3. 연사핵 (Fire Rate Hack) - 발사 간격 검증
-            elif event.type == "FIRE" and event.weapon_id:
-                key = f"player:{pid}:last_fire"
-                last_time = await r.get(key)
-                if last_time:
-                    interval = event.timestamp - float(last_time)
-                    w_info = FPSSecurityEngine.WEAPON_DB.get(event.weapon_id)
-                    if w_info and interval < w_info["min_interval"] * 0.9: # 10% 오차 허용
-                        violations.append({"type": "Fire Rate Hack", "interval": round(interval, 4)})
-                await r.setex(key, 60, event.timestamp)
+            # 2) 초당 누적 데미지(DPS) 체크 (Redis 권장)
+            #    같은 초(epoch second) 키에 누적시키고 임계치 넘으면 탐지
+            now_sec = int(time.time())
+            dps_key = f"player:{pid}:dmg:{now_sec}"
 
-            # 4. 에임핵 (Aim Hack) - 시야각 엔트로피/점프 분석
-            elif event.type == "AIM" and event.view_angles:
-                key = f"player:{pid}:aim"
-                # 이전 각도 가져오기
-                prev_angles_raw = await r.get(key)
-                if prev_angles_raw:
-                    prev_angles = json.loads(prev_angles_raw)
-                    # 각도 차이(Delta) 계산
-                    delta_pitch = abs(event.view_angles[0] - prev_angles[0])
-                    delta_yaw = abs(event.view_angles[1] - prev_angles[1])
-                    
-                    # 1프레임만에 비정상적으로 큰 회전 (Snap Aim)
-                    if delta_pitch > FPSSecurityEngine.CONFIG["AIM_ANGLE_JUMP"] or delta_yaw > FPSSecurityEngine.CONFIG["AIM_ANGLE_JUMP"]:
-                        violations.append({"type": "Aim Snap Detected", "delta": [delta_pitch, delta_yaw]})
-                
-                await r.setex(key, 60, json.dumps(event.view_angles))
+            if REDIS_OK and r is not None:
+                total = r.incrbyfloat(dps_key, dmg)
+                r.expire(dps_key, CONFIG["DMG_DPS_WINDOW_SEC"] + 1)
+            else:
+                # Redis 없을 때 메모리 백업
+                if not hasattr(analyze_security_risk, "_dmg_mem"):
+                    analyze_security_risk._dmg_mem = {}
+                mem = analyze_security_risk._dmg_mem
+                total = mem.get(dps_key, 0.0) + dmg
+                mem[dps_key] = total
 
-        if violations:
-            alert = {
-                "player_id": pid,
-                "violations": violations,
-                "timestamp": datetime.now().isoformat()
-            }
-            await manager.broadcast_alert(alert)
+            if total > CONFIG["DMG_DPS_MAX"]:
+                detected_hacks.append({
+                    "type": "Damage Hack",
+                    "reason": "Damage per second exceeds max",
+                    "dps_total": round(float(total), 2),
+                    "window_sec": CONFIG["DMG_DPS_WINDOW_SEC"],
+                    "dps_max": CONFIG["DMG_DPS_MAX"],
+                })
 
-# --- [5] API 엔드포인트 ---
+    # Alert manager if violations are found
+    if detected_hacks:
+        alert_data = {
+            "player_id": pid,
+            "session_id": payload.session_id,
+            "violations": detected_hacks,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        await manager.send_alert(alert_data)
 
-@app.post("/api/v1/report")
-async def report_logs(payload: LogPayload, background_tasks: BackgroundTasks):
-    # 비동기 백그라운드 분석 실행
-    background_tasks.add_task(FPSSecurityEngine.analyze, payload)
-    return {"status": "processing"}
+# --- [5] API Endpoints ---
+@app.post("/api/v1/logs")
+async def collect_logs(
+    payload: LogPayload,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+):
+    # 비인가 클라이언트 탐지
+    if x_api_key != CONFIG["AUTH_API_KEY"]:
+        client_ip = request.client.host if request.client else "unknown"
+        alert_data = {
+            "player_id": payload.player_id,
+            "session_id": payload.session_id,
+            "violations": [{
+                "type": "Unauthorized Client",
+                "client_ip": client_ip,
+                "has_api_key": bool(x_api_key),
+            }],
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        await manager.send_alert(alert_data)
 
-@app.websocket("/ws/security")
-async def security_ws(websocket: WebSocket):
+        if CONFIG["AUTH_ENFORCE_BLOCK"]:
+            raise HTTPException(status_code=401, detail="Unauthorized client (invalid API key)")
+
+    # DDoS / Speed / Fire 로직 수행
+    client_ip = request.client.host if request.client else "unknown"
+    exceeded, cnt = check_rate_limit(payload.player_id, client_ip)
+    if exceeded:
+        alert_data = {
+            "player_id": payload.player_id,
+            "session_id": payload.session_id,
+            "violations": [{
+                "type": "DDoS Pattern",
+                "count": cnt,
+                "window_sec": CONFIG["RL_WINDOW_SEC"],
+                "max_req": CONFIG["RL_MAX_REQ"],
+                "client_ip": client_ip
+            }],
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        await manager.send_alert(alert_data)
+        if CONFIG["RL_ENFORCE_BLOCK"]:
+            raise HTTPException(status_code=429, detail="Too many requests (rate limit exceeded)")
+
+    background_tasks.add_task(analyze_security_risk, payload)
+    return {"status": "ok", "received": len(payload.events), "rate_count": cnt}
+
+@app.websocket("/ws/dashboard")
+async def websocket_dashboard(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            await websocket.receive_text()
+            await websocket.receive_text() # Keep connection alive
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
