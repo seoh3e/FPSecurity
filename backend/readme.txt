@@ -21,6 +21,16 @@ curl -X POST http://127.0.0.1:8000/api/v1/logs \
      }'
 
 # 데미지핵
+curl -X POST http://127.0.0.1:8000/api/v1/logs \
+     -H "Content-Type: application/json" \
+     -H "X-API-Key: dev-secret" \
+     -d '{
+       "player_id": "p1",
+       "session_id": "s1",
+       "events": [
+         {"type": "HIT", "damage":999, "weapon_id":"rifle","target_id":"p2"}
+       ]
+     }'
 
 # 연사핵
 curl -X POST http://127.0.0.1:8000/api/v1/logs \
