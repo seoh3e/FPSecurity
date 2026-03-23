@@ -37,6 +37,10 @@ class GameEvent(BaseModel):
     weapon_id: Optional[str] = None
     target_id: Optional[str] = None
 
+    is_grounded: Optional[bool] = True
+    vel_y: Optional[float] = 0.0
+    pos_y: Optional[float] = 0.0
+
 class LogPayload(BaseModel):
     player_id: str
     session_id: str
@@ -231,6 +235,53 @@ async def analyze_security_risk(payload: LogPayload):
 
         await manager.send_alert(alert_data)
 
+async def analyze_fly_hack(payload: LogPayload):
+    pid = payload.player_id
+    fly_violations = []
+
+    # 1. State 패킷이 포함되어 있는지 확인 (isGrounded, velY, posY 활용)
+    # 기존 GameEvent 모델에 해당 필드들이 있다고 가정하거나, 
+    # payload 데이터 구조에 따라 필터링하여 사용합니다.
+    for event in payload.events:
+        if event.type == "STATE":
+            # 필드 추출 (이벤트 데이터 내에 포함되어 있다고 가정)
+            is_grounded = getattr(event, "is_grounded", True)
+            vel_y = getattr(event, "vel_y", 0.0)
+            pos_y = getattr(event, "pos_y", 0.0)
+
+            fly_key = f"player:{pid}:airborne_count"
+
+            # [탐지 조건] 
+            # 1. 땅에 닿지 않음 
+            # 2. 수직 속도가 중력 가속도에 의한 하강(-값)이 아님 (위로 솟거나 공중 부양)
+            if not is_grounded and vel_y >= -0.5:
+                if REDIS_OK:
+                    air_count = r.incr(fly_key)
+                    r.expire(fly_key, 10) # 10초 후 초기화
+                else:
+                    air_count = 1 # Redis 없을 때 단발성 체크
+                
+                # 일정 시간(예: 5회 연속 샘플링) 이상 공중에 떠 있으면 핵으로 간주
+                if air_count >= 5:
+                    fly_violations.append({
+                        "type": "Fly Hack (Hovering/Flying)",
+                        "current_y": pos_y,
+                        "vel_y": vel_y,
+                        "airborne_samples": air_count
+                    })
+            else:
+                # 땅에 닿으면 카운트 초기화
+                if REDIS_OK: r.set(fly_key, 0)
+
+    if fly_violations:
+        alert_data = {
+            "player_id": pid,
+            "session_id": payload.session_id,
+            "violations": fly_violations,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        await manager.send_alert(alert_data)
+
 # --- [5] API Endpoints ---
 @app.post("/api/v1/logs")
 async def collect_logs(
@@ -287,6 +338,8 @@ async def collect_logs(
         await session.commit()
 
     background_tasks.add_task(analyze_security_risk, payload)
+
+    background_tasks.add_task(analyze_fly_hack, payload)
     return {"status": "ok", "received": len(payload.events), "rate_count": cnt}
 
 @app.websocket("/ws/dashboard")
