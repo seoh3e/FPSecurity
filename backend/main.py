@@ -2,16 +2,20 @@ import uvicorn
 import json
 import numpy as np
 import redis
-from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, HTTPException, Header
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 import time
-from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, HTTPException
 import os
-from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, HTTPException, Header
+from backend.db import engine, AsyncSessionLocal, Base
+from backend.models import RawLog, Alert
 
 app = FastAPI(title="Pro Game Security Analysis (Redis + Stats)")
+@app.on_event("startup")
+async def on_startup():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 # --- [1] Infrastructure Setup ---
 # Ensure redis-server is running (Docker or Local)
@@ -58,7 +62,7 @@ manager = DashboardManager()
 
 # --- [4] Security Detection Engine (Redis + Statistical Analysis) ---
 CONFIG = {
-    # ✅ Unauthorized Client (API Key) - NEW
+    #  Unauthorized Client (API Key) - NEW
     "AUTH_API_KEY": os.getenv("SECURITY_API_KEY", "dev-secret"),
     "AUTH_ENFORCE_BLOCK": True,   # True면 401로 차단 / False면 알림만
     "MOVE_THRESHOLD": 12.0,
@@ -67,12 +71,12 @@ CONFIG = {
     "MIN_SAMPLES": 5,
     "TTL": 1800,
 
-    # ✅ DDoS Pattern (요청 빈도 제한) - NEW
+    #  DDoS Pattern (요청 빈도 제한) - NEW
     "RL_WINDOW_SEC": 1,         # 몇 초 창으로 볼지
     "RL_MAX_REQ": 5,            # 창 내 최대 요청 수(초당 5회 초과 시 탐지)
     "RL_ENFORCE_BLOCK": False,  # True면 429로 차단, False면 탐지/알림만
     
-    # ✅ Damage Hack - NEW
+    #  Damage Hack - NEW
     "DMG_EVENT_TYPES": {"HIT", "DAMAGE"},
     "DMG_MAX_DEFAULT": 120.0,  # 무기 정보 없을 때 단발 상한
     "DMG_MAX_BY_WEAPON": {     # (선택) 무기별 단발 상한
@@ -85,7 +89,7 @@ CONFIG = {
 "DMG_ALERT_COOLDOWN_SEC": 5,  # 같은 플레이어는 5초에 1번만 알림(스팸 방지)
 }
 
-# ✅ DDoS Pattern 탐지: player_id 또는 IP 기준 요청 폭주 감지
+#  DDoS Pattern 탐지: player_id 또는 IP 기준 요청 폭주 감지
 def check_rate_limit(player_id: str, client_ip: str) -> tuple[bool, int]:
     """
     return (is_exceeded, current_count)
@@ -262,6 +266,15 @@ async def collect_logs(
         await manager.send_alert(alert_data)
         if CONFIG["RL_ENFORCE_BLOCK"]:
             raise HTTPException(status_code=429, detail="Too many requests (rate limit exceeded)")
+        
+    #  원본 payload DB 저장 (인증/레이트리밋 통과 후)
+    async with AsyncSessionLocal() as session:
+        session.add(RawLog(
+            player_id=payload.player_id,
+            session_id=payload.session_id,
+            payload=payload.model_dump(),  # pydantic v2
+        ))
+        await session.commit()
 
     background_tasks.add_task(analyze_security_risk, payload)
     return {"status": "ok", "received": len(payload.events), "rate_count": cnt}
