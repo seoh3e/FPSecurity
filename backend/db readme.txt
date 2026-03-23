@@ -22,7 +22,9 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/v1/logs" `
   -Headers @{ "X-API-Key"="team-secret-1234" } `
   -Body $bodyJson
 
-
+---------------------------------------------------------
+json 보기
+psql "postgresql://fps:fps1234@localhost:5432/fpsdb" -c "select alert from alerts order by id desc limit 1;"
 
 ---------------------------------------------------------------------------------------------------
 WSL새로 켜서
