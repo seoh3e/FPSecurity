@@ -62,7 +62,7 @@ manager = DashboardManager()
 
 # --- [4] Security Detection Engine (Redis + Statistical Analysis) ---
 CONFIG = {
-    #  Unauthorized Client (API Key) - NEW
+    # ✅ Unauthorized Client (API Key) - NEW
     "AUTH_API_KEY": os.getenv("SECURITY_API_KEY", "dev-secret"),
     "AUTH_ENFORCE_BLOCK": True,   # True면 401로 차단 / False면 알림만
     "MOVE_THRESHOLD": 12.0,
@@ -71,12 +71,12 @@ CONFIG = {
     "MIN_SAMPLES": 5,
     "TTL": 1800,
 
-    #  DDoS Pattern (요청 빈도 제한) - NEW
+    # ✅ DDoS Pattern (요청 빈도 제한) - NEW
     "RL_WINDOW_SEC": 1,         # 몇 초 창으로 볼지
     "RL_MAX_REQ": 5,            # 창 내 최대 요청 수(초당 5회 초과 시 탐지)
     "RL_ENFORCE_BLOCK": False,  # True면 429로 차단, False면 탐지/알림만
     
-    #  Damage Hack - NEW
+    # ✅ Damage Hack - NEW
     "DMG_EVENT_TYPES": {"HIT", "DAMAGE"},
     "DMG_MAX_DEFAULT": 120.0,  # 무기 정보 없을 때 단발 상한
     "DMG_MAX_BY_WEAPON": {     # (선택) 무기별 단발 상한
@@ -89,7 +89,7 @@ CONFIG = {
 "DMG_ALERT_COOLDOWN_SEC": 5,  # 같은 플레이어는 5초에 1번만 알림(스팸 방지)
 }
 
-#  DDoS Pattern 탐지: player_id 또는 IP 기준 요청 폭주 감지
+# ✅ DDoS Pattern 탐지: player_id 또는 IP 기준 요청 폭주 감지
 def check_rate_limit(player_id: str, client_ip: str) -> tuple[bool, int]:
     """
     return (is_exceeded, current_count)
@@ -219,6 +219,16 @@ async def analyze_security_risk(payload: LogPayload):
             "violations": detected_hacks,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
+
+        #  DB에 alerts 저장 (send_alert 전에)
+        async with AsyncSessionLocal() as session:
+            session.add(Alert(
+                player_id=alert_data["player_id"],
+                session_id=alert_data["session_id"],
+                alert=alert_data,
+            ))
+            await session.commit()
+
         await manager.send_alert(alert_data)
 
 # --- [5] API Endpoints ---
