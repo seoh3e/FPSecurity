@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import JSONB
-from .db import Base
+from db import Base
 
 class RawLog(Base):
     __tablename__ = "raw_logs"
