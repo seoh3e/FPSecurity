@@ -8,8 +8,8 @@ from typing import List, Optional
 from datetime import datetime
 import time
 import os
-from backend.db import engine, AsyncSessionLocal, Base
-from backend.models import RawLog, Alert
+from db import engine, AsyncSessionLocal, Base
+from models import RawLog, Alert
 
 app = FastAPI(title="Pro Game Security Analysis (Redis + Stats)")
 @app.on_event("startup")
