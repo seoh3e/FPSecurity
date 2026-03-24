@@ -1,5 +1,3 @@
-sudo systemctl start redis-server
-sudo systemctl start postgresql
 uvicorn main:app --reload
 
 wscat -c ws://127.0.0.1:8000/ws/dashboard
@@ -97,4 +95,3 @@ curl -X POST http://127.0.0.1:8000/api/v1/logs \
          {"type": "STATE", "is_grounded": false, "pos_y": 30.0, "vel_y": 5.0}
        ]
      }'
-redis-cli flushall
