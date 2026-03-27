@@ -8,8 +8,9 @@ from typing import List, Optional
 from datetime import datetime
 import time
 import os
-from db import engine, AsyncSessionLocal, Base
-from models import RawLog, Alert
+from backend.db import engine, AsyncSessionLocal, Base
+from backend.models import RawLog, Alert
+from sqlalchemy import select, func, desc
 
 app = FastAPI(title="Pro Game Security Analysis (Redis + Stats)")
 @app.on_event("startup")
@@ -36,10 +37,6 @@ class GameEvent(BaseModel):
     damage: Optional[float] = None
     weapon_id: Optional[str] = None
     target_id: Optional[str] = None
-
-    is_grounded: Optional[bool] = True
-    vel_y: Optional[float] = 0.0
-    pos_y: Optional[float] = 0.0
 
 class LogPayload(BaseModel):
     player_id: str
@@ -224,7 +221,7 @@ async def analyze_security_risk(payload: LogPayload):
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
 
-        #  DB에 alerts 저장 (send_alert 전에)
+        # ✅ DB에 alerts 저장 (send_alert 전에)
         async with AsyncSessionLocal() as session:
             session.add(Alert(
                 player_id=alert_data["player_id"],
@@ -233,53 +230,6 @@ async def analyze_security_risk(payload: LogPayload):
             ))
             await session.commit()
 
-        await manager.send_alert(alert_data)
-
-async def analyze_fly_hack(payload: LogPayload):
-    pid = payload.player_id
-    fly_violations = []
-
-    # 1. State 패킷이 포함되어 있는지 확인 (isGrounded, velY, posY 활용)
-    # 기존 GameEvent 모델에 해당 필드들이 있다고 가정하거나, 
-    # payload 데이터 구조에 따라 필터링하여 사용합니다.
-    for event in payload.events:
-        if event.type == "STATE":
-            # 필드 추출 (이벤트 데이터 내에 포함되어 있다고 가정)
-            is_grounded = getattr(event, "is_grounded", True)
-            vel_y = getattr(event, "vel_y", 0.0)
-            pos_y = getattr(event, "pos_y", 0.0)
-
-            fly_key = f"player:{pid}:airborne_count"
-
-            # [탐지 조건] 
-            # 1. 땅에 닿지 않음 
-            # 2. 수직 속도가 중력 가속도에 의한 하강(-값)이 아님 (위로 솟거나 공중 부양)
-            if not is_grounded and vel_y >= -0.5:
-                if REDIS_OK:
-                    air_count = r.incr(fly_key)
-                    r.expire(fly_key, 10) # 10초 후 초기화
-                else:
-                    air_count = 1 # Redis 없을 때 단발성 체크
-                
-                # 일정 시간(예: 5회 연속 샘플링) 이상 공중에 떠 있으면 핵으로 간주
-                if air_count >= 5:
-                    fly_violations.append({
-                        "type": "Fly Hack (Hovering/Flying)",
-                        "current_y": pos_y,
-                        "vel_y": vel_y,
-                        "airborne_samples": air_count
-                    })
-            else:
-                # 땅에 닿으면 카운트 초기화
-                if REDIS_OK: r.set(fly_key, 0)
-
-    if fly_violations:
-        alert_data = {
-            "player_id": pid,
-            "session_id": payload.session_id,
-            "violations": fly_violations,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
         await manager.send_alert(alert_data)
 
 # --- [5] API Endpoints ---
@@ -338,9 +288,179 @@ async def collect_logs(
         await session.commit()
 
     background_tasks.add_task(analyze_security_risk, payload)
-
-    background_tasks.add_task(analyze_fly_hack, payload)
     return {"status": "ok", "received": len(payload.events), "rate_count": cnt}
+
+# =========================
+#  Helpers for GET APIs
+# =========================
+def _require_api_key(x_api_key: str | None):
+    if x_api_key != CONFIG["AUTH_API_KEY"]:
+        raise HTTPException(status_code=401, detail="Unauthorized client (invalid API key)")
+
+
+def _rawlog_to_dict(row: RawLog) -> dict:
+    payload = row.payload if isinstance(row.payload, dict) else {}
+    return {
+        "id": row.id,
+        "player_id": row.player_id,
+        "session_id": row.session_id,
+        "created_at": row.created_at,
+        "event_count": len(payload.get("events", [])),
+        "payload": payload,
+    }
+
+
+def _alert_to_dict(row: Alert) -> dict:
+    alert = row.alert if isinstance(row.alert, dict) else {}
+    return {
+        "id": row.id,
+        "player_id": row.player_id,
+        "session_id": row.session_id,
+        "created_at": row.created_at,
+        "alert": alert,
+    }
+
+
+# =========================
+#  GET 1) 이벤트(raw_logs) 목록 조회
+# =========================
+@app.get("/api/v1/events")
+async def list_events(
+    player_id: str | None = None,
+    session_id: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+):
+    _require_api_key(x_api_key)
+
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+
+    stmt = select(RawLog)
+    cnt_stmt = select(func.count()).select_from(RawLog)
+
+    if player_id:
+        stmt = stmt.where(RawLog.player_id == player_id)
+        cnt_stmt = cnt_stmt.where(RawLog.player_id == player_id)
+    if session_id:
+        stmt = stmt.where(RawLog.session_id == session_id)
+        cnt_stmt = cnt_stmt.where(RawLog.session_id == session_id)
+
+    stmt = stmt.order_by(RawLog.created_at.desc()).limit(limit).offset(offset)
+
+    async with AsyncSessionLocal() as session:
+        total = await session.scalar(cnt_stmt)
+        result = await session.execute(stmt)
+        rows = result.scalars().all()
+
+    return {
+        "total": int(total or 0),
+        "limit": limit,
+        "offset": offset,
+        "items": [_rawlog_to_dict(r) for r in rows],
+    }
+
+
+# =========================
+#  GET 2) 알림(alerts) 목록 조회
+# =========================
+@app.get("/api/v1/alerts")
+async def list_alerts(
+    player_id: str | None = None,
+    session_id: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+):
+    _require_api_key(x_api_key)
+
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+
+    stmt = select(Alert)
+    cnt_stmt = select(func.count()).select_from(Alert)
+
+    if player_id:
+        stmt = stmt.where(Alert.player_id == player_id)
+        cnt_stmt = cnt_stmt.where(Alert.player_id == player_id)
+    if session_id:
+        stmt = stmt.where(Alert.session_id == session_id)
+        cnt_stmt = cnt_stmt.where(Alert.session_id == session_id)
+
+    stmt = stmt.order_by(Alert.created_at.desc()).limit(limit).offset(offset)
+
+    async with AsyncSessionLocal() as session:
+        total = await session.scalar(cnt_stmt)
+        result = await session.execute(stmt)
+        rows = result.scalars().all()
+
+    return {
+        "total": int(total or 0),
+        "limit": limit,
+        "offset": offset,
+        "items": [_alert_to_dict(r) for r in rows],
+    }
+
+
+# =======================
+#  GET 3) 플레이어 상세 조회
+# ========================
+@app.get("/api/v1/players/{player_id}")
+async def get_player_detail(
+    player_id: str,
+    events_limit: int = 50,
+    alerts_limit: int = 50,
+    sessions_limit: int = 20,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+):
+    _require_api_key(x_api_key)
+
+    events_limit = max(1, min(events_limit, 200))
+    alerts_limit = max(1, min(alerts_limit, 200))
+    sessions_limit = max(1, min(sessions_limit, 200))
+
+    async with AsyncSessionLocal() as session:
+        last_seen = await session.scalar(
+            select(func.max(RawLog.created_at)).where(RawLog.player_id == player_id)
+        )
+
+        # 세션 목록(최근 세션부터)
+        sess_stmt = (
+            select(RawLog.session_id, func.max(RawLog.created_at).label("last_seen"))
+            .where(RawLog.player_id == player_id)
+            .group_by(RawLog.session_id)
+            .order_by(desc("last_seen"))
+            .limit(sessions_limit)
+        )
+        sess_rows = (await session.execute(sess_stmt)).all()
+        sessions = [{"session_id": s, "last_seen": t} for (s, t) in sess_rows]
+
+        # 최근 이벤트들
+        ev_stmt = (
+            select(RawLog)
+            .where(RawLog.player_id == player_id)
+            .order_by(RawLog.created_at.desc())
+            .limit(events_limit)
+        )
+        ev_rows = (await session.execute(ev_stmt)).scalars().all()
+
+        # 최근 알림들
+        al_stmt = (
+            select(Alert)
+            .where(Alert.player_id == player_id)
+            .order_by(Alert.created_at.desc())
+            .limit(alerts_limit)
+        )
+        al_rows = (await session.execute(al_stmt)).scalars().all()
+
+    return {
+        "player_id": player_id,
+        "last_seen": last_seen,
+        "sessions": sessions,
+        "recent_events": [_rawlog_to_dict(r) for r in ev_rows],
+        "recent_alerts": [_alert_to_dict(r) for r in al_rows],
+    }
 
 @app.websocket("/ws/dashboard")
 async def websocket_dashboard(websocket: WebSocket):
