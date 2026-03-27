@@ -35,7 +35,7 @@ export default function EventsClient({ events }: { events: SecurityEvent[] }) {
           marginBottom: 12,
         }}
       >
-        <span style={{ opacity: 0.75, fontSize: 13 }}>Risk Filter:</span>
+        <span style={{ opacity: 0.75, fontSize: 13 }}>위험도 필터:</span>
 
         <FilterButton active={filter === "ALL"} onClick={() => setFilter("ALL")}>
           All

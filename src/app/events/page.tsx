@@ -3,6 +3,7 @@ import EventsClient from "./EventsClient";
 
 export default async function EventsPage() {
   const events = await getEvents();
+  console.log("이벤트 데이터:", events);
 
   return (
     <main style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
