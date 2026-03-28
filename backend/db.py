@@ -7,6 +7,12 @@ DATABASE_URL = os.getenv(
     "postgresql+asyncpg://fps:fps1234@localhost:5432/fpsdb",
 )
 
-engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,
+    pool_pre_ping=True,
+    connect_args={"ssl": False},
+)
+
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 Base = declarative_base()
